@@ -1,0 +1,717 @@
+remove(list = ls(all.names = TRUE)) 
+library(readstata13)
+library(zoo)
+library(tseries)
+library(forecast)
+library(lmtest)
+library(mFilter)
+library(strucchange)
+library(readxl)
+library(writexl)      
+library(ggplot2)      
+library(tidyverse)    
+library(usethis)      
+library(datos)        
+library(dplyr)        
+library(tidyr)       
+library(xtable)       
+library(beepr)        
+library(gridExtra)   
+library(xts)   
+
+
+options(scipen=999)   
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path)) 
+
+data_ipc <- read_excel('serie continua y empalmada.xlsx')
+
+data_ipc$Fecha <- as.Date(data_ipc$Fecha)
+
+
+
+# Paso mi variable a logaritmo natural 
+data_ipc <- data_ipc %>% 
+  mutate(lntasa = log(Nivel)) # con la función mutate genero una nueva variable en mi dataframe
+
+# Genero la diferencia del logaritmo natural
+data_ipc <- data_ipc %>% 
+  mutate(Inflación = c(NA, diff(lntasa)))
+
+data_ipc <- na.omit(data_ipc)
+
+#agrego t
+
+data_ipc$t <- 1:nrow(data_ipc)
+
+
+#Pongo la fecha
+
+data_ipc$Fecha <- seq.Date(from = as.Date("2004-01-01"), by = "month", length.out = nrow(data_ipc))
+
+
+
+#--------------------------------------------PUNTO 1--------------------------------------------------------#
+
+
+#Gráfico
+
+ggplot(data_ipc, aes(x = Fecha, y = Inflación*100)) +
+  geom_line(size = 1) + 
+  labs(title = "Inflación mensual 2004-2024", 
+       x = "Tiempo", 
+       y = "Inflación mensual") +
+  theme_minimal(base_size = 15) +  
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),  
+    axis.title = element_text(face = "bold"),  
+    axis.text = element_text(color = "gray20"),  
+    panel.grid.major = element_line(color = "gray80"),  
+    panel.grid.minor = element_blank()  
+  )
+
+
+#Raíces unitarias
+
+adf.test(data_ipc$Nivel, alternative = "stationary")  # Sin rezagos
+adf.test(data_ipc$Inflación, alternative = "stationary")  # Sin rezagos
+
+pp.test(data_ipc$Inflación)
+
+#Tendencia
+
+
+lm(Inflación ~ t, data = data_ipc) %>%  
+  summary()  
+
+tendencias <- data_ipc %>%
+  mutate(tendencia1 = predict(lm(Inflación ~ t, data = data_ipc)))
+
+data_ipc$t2 <- data_ipc$t^2  
+
+data_ipc$t3 <- data_ipc$t^3  
+lm(Inflación ~ t + t2 , data = data_ipc) %>%  
+  summary()   
+tendencias <- tendencias %>%
+  mutate(tendencia2 = predict(lm(Inflación ~ t + t2, data = data_ipc)))
+
+lm(Inflación ~ t + t2 + t3, data = data_ipc) %>%  
+  summary()  
+
+tendencias <- tendencias %>%
+  mutate(tendencia3 = predict(lm(Inflación ~ t + t2 + t3, data = data_ipc)))
+
+ggplot(tendencias, aes(x = Fecha)) +
+  geom_line(aes(y = Inflación, color = "Inflación"), size = 1) +
+  geom_line(aes(y = tendencia1, color = "Tendencia lineal"), size = 1) +  
+  geom_line(aes(y = tendencia2, color = "Tendencia cuadrática"), size = 1) +
+  geom_line(aes(y = tendencia3, color = "Tendencia cúbica"), size = 1) +  
+  labs(title = "Inflación mensual y tendencias", 
+       x = "Tiempo", 
+       y = "Inflación") +
+  theme_minimal(base_size = 15) +
+  theme(
+    legend.position = "bottom",  
+    legend.title = element_blank(),  
+    legend.text = element_text(size = 15),  
+    plot.title = element_text(hjust = 0.5, face = "bold"),  
+    axis.title = element_text(face = "bold"),  
+    axis.text = element_text(color = "gray20"),  
+    panel.grid.major = element_line(color = "gray80"),  
+    panel.grid.minor = element_blank()
+  )
+
+
+hp_filter <- hpfilter(data_ipc$Inflación, freq = 14400.)  
+ggplot() +
+  geom_line(aes(x = data_ipc$Fecha, y = data_ipc$Inflación*100), color = "black", size = 1) +  
+  geom_line(aes(x = data_ipc$Fecha, y = hp_filter$trend*100), color = "blue", size = 1) +    #Tendencia
+  geom_line(aes(x = data_ipc$Fecha, y = hp_filter$cycle*100), color = "red", size = 1) +     #Ciclo
+  labs(title = "Inflación mensual y descomposición HP", 
+       x = "Tiempo", 
+       y = "Inflación") +  
+  theme_minimal(base_size = 15) +  
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),  
+    axis.title = element_text(face = "bold"),  
+    axis.text = element_text(color = "gray20"),  
+    panel.grid.major = element_line(color = "gray80"),   
+    panel.grid.minor = element_blank()  
+  )
+
+#Ajusta mejor el HP, nos quedamos con esa
+
+
+data_ipc <- data_ipc %>%
+  mutate(ipc_st = hp_filter$cycle)
+
+
+#Estacionalidad
+
+data_ipc <- data_ipc %>%
+  mutate(month = month(Fecha))  
+lm(ipc_st ~ factor(month), data = data_ipc) %>%  
+  summary() 
+
+ggplot(data_ipc, aes(x = Fecha)) +  # Eje X: tiempo
+  geom_line(aes(y = ipc_st, color = "Inflación sin tendencia y estacionalidad"), size = 1) +  
+  geom_line(aes(y = mean(ipc_st, na.rm = TRUE), color = "Esperanza"), size = 1) +  
+  labs(title = "Inflación mensual sin tendencia y estacionalidad",  
+       x = "Tiempo",  
+       y = "Inflación") + 
+  theme_minimal(base_size = 15) +  
+  theme(  
+    legend.position = "bottom",  
+    legend.title = element_blank(),  
+    legend.text = element_text(size = 15),   
+    plot.title = element_text(hjust = 0.5, face = "bold"),  
+    axis.title = element_text(face = "bold"),  
+    axis.text = element_text(color = "gray20"),  
+    panel.grid.major = element_line(color = "gray80"),  
+    panel.grid.minor = element_blank()  
+  )
+
+## CREEMOS QUE NO HAY RAIZ UNITARIA NI ESTACIONALIDAD. ipc_st NO ES DESESTACIONALIZADO, SINO QUE ES 
+##INFLACION-TENDENCIA 
+
+
+#--------------------------------------------PUNTO 2--------------------------------------------------------#
+
+#Correlogramas
+
+acf(data_ipc$ipc_st, lag.max = 24, main = "Correlograma de inflación sin tendencia")
+pacf(data_ipc$ipc_st, lag.max = 24, main = "Correlograma parcial de inflación sin tendencia")
+
+results <- NULL
+for(p in 0:5) {  
+  for(q in 0:3) {  
+    estim <- arima(data_ipc$ipc_st, c(p,0,q))  
+    results <- rbind(results, c(p, q, AIC(estim), BIC(estim)))  
+  }
+}
+colnames(results) <- c("p", "q", "AIC", "BIC")
+
+
+#Seleccionar el mejor modelo
+
+results_df <- as.data.frame(results)
+results_df[order(results_df$AIC), ][1:3, ] %>%  
+  select (-BIC)   
+results_df[order(results_df$BIC), ][1:3, ] %>%  
+  select (-AIC)
+
+
+
+#El mejor modelo es un ARMA 41   51   43 bajo ambos criterios
+
+
+#--------------------------------------------PUNTO 3--------------------------------------------------------#
+
+data_ipc_forecast <- data_ipc %>%
+  select(t, ipc_st, Inflación, Fecha)
+
+data_ipc_forecast<- data_ipc_forecast%>%        
+  filter(t < 241)
+
+
+
+acf(data_ipc_forecast$ipc_st, lag.max = 24, main = "Correlograma de inflación sin tendencia")
+pacf(data_ipc_forecast$ipc_st, lag.max = 24, main = "Correlograma parcial de inflación sin tendencia")
+
+results <- NULL
+for(p in 0:1) {  
+  for(q in 0:1) {  
+    estim <- arima(data_ipc_forecast$ipc_st, c(p,0,q))  
+    results <- rbind(results, c(p, q, AIC(estim), BIC(estim)))  
+  }
+}
+colnames(results) <- c("p", "q", "AIC", "BIC")
+
+
+#Seleccionar el mejor modelo
+
+results_df <- as.data.frame(results)
+results_df[order(results_df$AIC), ][1:3, ] %>%  
+  select (-BIC)   
+results_df[order(results_df$BIC), ][1:3, ] %>%  
+  select (-AIC)
+
+
+#01   11     10  hacemos traintest 85% y nos quedamos con 11
+
+hp_filter_forecast <- hpfilter(data_ipc_forecast$Inflación, freq = 14400)
+
+data_ipc_forecast <- data_ipc_forecast %>%
+  mutate(hp_filter_forecast = as.numeric(hp_filter_forecast$trend))
+
+new_t <- seq(max(data_ipc_forecast$t) + 1, max(data_ipc_forecast$t) + 9, by = 1)
+
+modelo_arima <- arima(data_ipc_forecast$ipc_st, order = c(1, 0, 1))
+
+forecast_wo_trend_seasonal <- forecast(modelo_arima, h = 9, level = 95)  #Pronostico arima
+
+
+
+trend_model <- auto.arima(data_ipc_forecast$hp_filter_forecast)
+
+
+trend_forecast <- forecast(trend_model, h = 9)
+
+plot(trend_forecast)
+
+
+inflation_forecast <- forecast_wo_trend_seasonal$mean + trend_forecast$mean
+
+
+forecast_table <- data.frame(
+  t = new_t,
+  ciclo = forecast_wo_trend_seasonal$mean,
+  tendencia = trend_forecast,
+  inflacion_predicha = inflation_forecast
+)
+
+data_ipc_forecast_1 <- data_ipc_forecast %>%
+  select(t, Inflación, Fecha)
+
+data_ipc_forecast_1 <- data_ipc_forecast_1 %>%
+  bind_rows(data.frame(t = new_t, Inflación = inflation_forecast))
+
+data_ipc_forecast_1$t <- 1:nrow(data_ipc_forecast_1)
+
+data_ipc_forecast_1$Fecha <- seq.Date(from = as.Date("2004-01-01"), by = "month", length.out = nrow(data_ipc_forecast_1))
+
+#grafico
+
+ggplot(data_ipc_forecast_1, aes(x = Fecha)) +
+  geom_line(aes(y = Inflación*100, color = "Inflación"), size = 1) +
+  geom_vline(xintercept = as.Date("2024-01-01"), linetype = "dashed", color = "red", size = 1) +
+  labs(
+    title = "Pronóstico de Inflación", 
+    x = "Tiempo", 
+    y = "Inflación"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "gray20"),
+    panel.grid.major = element_line(color = "gray80"),
+    panel.grid.minor = element_blank()
+  )
+
+
+
+##Test ruido blanco
+
+residuos_arima <- residuals(modelo_arima)
+
+Box.test(residuos_arima, lag = 24, type = "Ljung-Box")
+
+
+
+##### TRAIN TEST  ###
+
+##Modelo1
+
+
+data_ipc_forecast <- data_ipc %>%
+  select(t, ipc_st, Inflación, Fecha)
+
+data_ipc_forecast <- data_ipc_forecast %>%
+  filter(t<241)
+
+tmax <- 241
+porcentaje <- 0.85
+
+tlimite <- as.numeric(tmax*porcentaje) #este es el punto de la division.
+
+
+# Dividir los datos
+data_train <- subset(data_ipc_forecast, t < tlimite )
+data_test <- subset(data_ipc_forecast, t >= tlimite)
+
+# Ajustar el modelo ARIMA al conjunto de entrenamiento
+modelo_arima_train <- arima(data_train$ipc_st, order = c(0, 0, 1))
+summary(modelo_arima_train)
+
+# Generar el pronóstico para el período de prueba
+n_ahead <- nrow(data_test) # Número de períodos en el conjunto de prueba
+pronostico_arima_test <- predict(modelo_arima_train, n.ahead = n_ahead)
+
+# Crear un dataframe con los valores reales y pronosticados
+valores_pronosticados <- pronostico_arima_test$pred
+df_comparacion <- data.frame(
+  Fecha = data_test$Fecha,
+  Real = data_test$ipc_st,
+  Pronóstico = valores_pronosticados
+)
+
+# Calcular el error del pronóstico
+df_comparacion <- df_comparacion %>%
+  mutate(Error = Real - Pronóstico,
+         Error_Cuadrado = Error^2)
+
+# Calcular suma y raíz cuadrada de los errores al cuadrado
+suma_errores <- sum(df_comparacion$Error_Cuadrado, na.rm = TRUE)
+raiz_cuadrada_errores <- sqrt(suma_errores)
+modelo1_errores <- raiz_cuadrada_errores
+   
+
+
+
+
+########### Modelo 2
+
+
+data_ipc_forecast <- data_ipc %>%
+  select(t, ipc_st, Inflación, Fecha)
+
+data_ipc_forecast <- data_ipc_forecast %>%
+  filter(t<241)
+
+
+tlimite <- as.numeric(tmax*porcentaje) #este es el punto de la division.
+
+
+# Dividir los datos
+data_train <- subset(data_ipc_forecast, t < tlimite )
+data_test <- subset(data_ipc_forecast, t >= tlimite)
+
+# Ajustar el modelo ARIMA al conjunto de entrenamiento
+modelo_arima_train <- arima(data_train$ipc_st, order = c(1, 0, 1))
+summary(modelo_arima_train)
+
+# Generar el pronóstico para el período de prueba
+n_ahead <- nrow(data_test) # Número de períodos en el conjunto de prueba
+pronostico_arima_test <- predict(modelo_arima_train, n.ahead = n_ahead)
+
+# Crear un dataframe con los valores reales y pronosticados
+valores_pronosticados <- pronostico_arima_test$pred
+df_comparacion <- data.frame(
+  Fecha = data_test$Fecha,
+  Real = data_test$ipc_st,
+  Pronóstico = valores_pronosticados
+)
+
+# Calcular el error del pronóstico
+df_comparacion <- df_comparacion %>%
+  mutate(Error = Real - Pronóstico,
+         Error_Cuadrado = Error^2)
+
+# Calcular suma y raíz cuadrada de los errores al cuadrado
+suma_errores <- sum(df_comparacion$Error_Cuadrado, na.rm = TRUE)
+raiz_cuadrada_errores <- sqrt(suma_errores)
+modelo2_errores <- raiz_cuadrada_errores
+
+
+
+##########Modelo 3
+
+
+
+data_ipc_forecast <- data_ipc %>%
+  select(t, ipc_st, Inflación, Fecha) # Asegurar la muestra relevante
+
+data_ipc_forecast <- data_ipc_forecast %>%
+  filter(t<241)
+
+
+tlimite <- as.numeric(tmax*porcentaje) #este es el punto de la division..
+
+
+# Dividir los datos
+data_train <- subset(data_ipc_forecast, t < tlimite )
+data_test <- subset(data_ipc_forecast, t >= tlimite)
+
+# Ajustar el modelo ARIMA al conjunto de entrenamiento
+modelo_arima_train <- arima(data_train$ipc_st, order = c(1, 0, 0))
+summary(modelo_arima_train)
+
+# Generar el pronóstico para el período de prueba
+n_ahead <- nrow(data_test) # Número de períodos en el conjunto de prueba
+pronostico_arima_test <- predict(modelo_arima_train, n.ahead = n_ahead)
+
+# Crear un dataframe con los valores reales y pronosticados
+valores_pronosticados <- pronostico_arima_test$pred
+df_comparacion <- data.frame(
+  Fecha = data_test$Fecha,
+  Real = data_test$ipc_st,
+  Pronóstico = valores_pronosticados
+)
+
+# Calcular el error del pronóstico
+df_comparacion <- df_comparacion %>%
+  mutate(Error = Real - Pronóstico,
+         Error_Cuadrado = Error^2)
+
+# Calcular suma y raíz cuadrada de los errores al cuadrado
+suma_errores <- sum(df_comparacion$Error_Cuadrado, na.rm = TRUE)
+raiz_cuadrada_errores <- sqrt(suma_errores)
+modelo3_errores <- raiz_cuadrada_errores
+
+
+print(modelo1_errores)
+print(modelo2_errores)
+print(modelo3_errores)
+
+
+#modelo 2 minimiza arma(1,1)
+
+
+
+
+
+#--------------------------------------------PUNTO 4--------------------------------------------------------#
+
+data_ipc_forecast_2 <- data_ipc %>%
+  select(t, ipc_st, Inflación)
+
+
+#Vuelvo a testear arma
+
+acf(data_ipc_forecast_2$ipc_st, lag.max = 24, main = "Correlograma de inflación sin tendencia")
+pacf(data_ipc_forecast_2$ipc_st, lag.max = 24, main = "Correlograma parcial de inflación sin tendencia")
+
+results <- NULL
+for(p in 0:5) {  
+  for(q in 0:3) {  
+    estim <- arima(data_ipc_forecast_2$ipc_st, c(p,0,q))  
+    results <- rbind(results, c(p, q, AIC(estim), BIC(estim)))  
+  }
+}
+colnames(results) <- c("p", "q", "AIC", "BIC")
+
+results_df <- as.data.frame(results)
+results_df[order(results_df$AIC), ][1:3, ] %>%  
+  select (-BIC)   
+results_df[order(results_df$BIC), ][1:3, ] %>%  
+  select (-AIC)
+
+## 4,1   5,1    4,3
+
+
+hp_filter_forecast_2 <- hpfilter(data_ipc_forecast_2$Inflación, freq = 14400)
+
+data_ipc_forecast_2 <- data_ipc_forecast_2 %>%
+  mutate(hp_filter_forecast_2 = as.numeric(hp_filter_forecast_2$trend))
+
+new_t_2 <- seq(max(data_ipc_forecast_2$t) + 1, max(data_ipc_forecast_2$t) + 3, by = 1)
+
+modelo_arima_2 <- arima(data_ipc_forecast_2$ipc_st, order = c(4,0,1))
+
+forecast_wo_trend_seasonal_2 <- forecast(modelo_arima_2, h = 3, level = 95)
+
+trend_model_2 <- auto.arima(data_ipc_forecast_2$hp_filter_forecast_2)
+
+trend_forecast_2 <- forecast(trend_model_2, h = 3)
+
+trend_forecast_2 <- as.numeric(trend_forecast_2$mean)
+
+plot(trend_forecast_2)
+
+inflation_forecast_2 <- forecast_wo_trend_seasonal_2$mean + trend_forecast_2
+
+inflation_forecast_2
+
+data_ipc_forecast_3 <- data_ipc_forecast_2 %>%
+  select(t, Inflación)
+
+data_ipc_forecast_3 <- data_ipc_forecast_3 %>%
+  bind_rows(data.frame(t = new_t_2, Inflación = inflation_forecast_2))
+
+data_ipc_forecast_3 <- data_ipc_forecast_3 %>%
+  select(t, Inflación)
+
+# Agregar las columnas al dataframe
+
+data_ipc_forecast_3$Fecha <- seq.Date(from = as.Date("2004-01-01"), by = "month", length.out = nrow(data_ipc_forecast_3))
+
+# Fecha de inicio del pronóstico
+fecha_pronostico <- as.Date("2024-09-01")
+
+
+
+
+##testeo ruido blanco 
+
+
+residuos_arima <- residuals(modelo_arima_2)
+
+Box.test(residuos_arima, lag = 24, type = "Ljung-Box")
+
+
+#Grafico
+
+
+ggplot(data_ipc_forecast_3, aes(x = Fecha)) +
+  geom_line(aes(y = Inflación*100, color = "Inflación"), size = 1) +
+  # Línea vertical en la fecha de inicio del pronóstico
+  geom_vline(xintercept = as.Date("2024-09-01"), linetype = "dashed", color = "red", size = 1) +
+  labs(title = "Pronóstico de Inflación", 
+       x = "Tiempo", 
+       y = "Inflación") +
+  theme_minimal(base_size = 15) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "gray20"),
+    panel.grid.major = element_line(color = "gray80"),
+    panel.grid.minor = element_blank()
+  )
+
+
+
+
+
+
+
+
+##### TRAIN TEST MODELO COMPLETO PUNTO 4 ###
+##Modelo1
+
+# División en entrenamiento y prueba: 85%-15%
+
+data_ipc_forecast_2 <- data_ipc %>%
+  select(t, ipc_st, Inflación, Fecha) 
+
+tmax <- 249
+porcentaje <- 0.85
+
+
+tlimite <- as.numeric(tmax*porcentaje) #este es el punto de la division.
+
+
+# Dividir los datos
+data_train <- subset(data_ipc_forecast, t < tlimite )
+data_test <- subset(data_ipc_forecast, t >= tlimite)
+
+
+# Ajustar el modelo ARIMA al conjunto de entrenamiento
+modelo_arima_train <- arima(data_train$ipc_st, order = c(4, 0, 1))
+summary(modelo_arima_train)
+
+# Gener0 el pronóstico para el período de prueba
+n_ahead <- nrow(data_test) # Número de períodos en el conjunto de prueba
+pronostico_arima_test <- predict(modelo_arima_train, n.ahead = n_ahead)
+
+# Crear un dataframe con los valores reales y pronosticados
+valores_pronosticados <- pronostico_arima_test$pred
+df_comparacion <- data.frame(
+  Fecha = data_test$Fecha,
+  Real = data_test$ipc_st,
+  Pronóstico = valores_pronosticados
+)
+
+# Calcular el error del pronóstico
+df_comparacion <- df_comparacion %>%
+  mutate(Error = Real - Pronóstico,
+         Error_Cuadrado = Error^2)
+
+# Calcular suma y raíz cuadrada de los errores al cuadrado
+suma_errores <- sum(df_comparacion$Error_Cuadrado, na.rm = TRUE)
+raiz_cuadrada_errores <- sqrt(suma_errores)
+
+modelo1_errores <- raiz_cuadrada_errores
+
+
+
+
+
+########### Modelo 2
+
+
+data_ipc_forecast_2 <- data_ipc %>%
+select(t, ipc_st, Inflación, Fecha) 
+
+
+
+
+
+# Dividir los datos
+data_train <- subset(data_ipc_forecast, t < tlimite )
+data_test <- subset(data_ipc_forecast, t >= tlimite)
+
+
+# Ajustar el modelo ARIMA al conjunto de entrenamiento
+modelo_arima_train <- arima(data_train$ipc_st, order = c(5, 0, 1))
+summary(modelo_arima_train)
+
+# Generar el pronóstico para el período de prueba
+n_ahead <- nrow(data_test) # Número de períodos en el conjunto de prueba
+
+pronostico_arima_test <- predict(modelo_arima_train, n.ahead = n_ahead)
+
+# Crear un dataframe con los valores reales y pronosticados
+valores_pronosticados <- pronostico_arima_test$pred
+df_comparacion <- data.frame(
+  Fecha = data_test$Fecha,
+  Real = data_test$ipc_st,
+  Pronóstico = valores_pronosticados
+)
+
+# Calcular el error del pronóstico
+df_comparacion <- df_comparacion %>%
+  mutate(Error = Real - Pronóstico,
+         Error_Cuadrado = Error^2)
+
+# Calcular suma y raíz cuadrada de los errores al cuadrado
+suma_errores <- sum(df_comparacion$Error_Cuadrado, na.rm = TRUE)
+raiz_cuadrada_errores <- sqrt(suma_errores)
+
+modelo2_errores <- raiz_cuadrada_errores
+
+
+
+
+##########Modelo 3
+
+
+data_ipc_forecast_2 <- data_ipc %>%
+  select(t, ipc_st, Inflación, Fecha) 
+
+
+
+# Dividir los datos
+data_train <- subset(data_ipc_forecast, t < tlimite )
+data_test <- subset(data_ipc_forecast, t >= tlimite)
+
+# Ajustar el modelo ARIMA al conjunto de entrenamiento
+modelo_arima_train <- arima(data_train$ipc_st, order = c(4, 0, 3))
+summary(modelo_arima_train)
+
+# Generar el pronóstico para el período de prueba
+n_ahead <- nrow(data_test) # Número de períodos en el conjunto de prueba
+pronostico_arima_test <- predict(modelo_arima_train, n.ahead = n_ahead)
+
+# Crear un dataframe con los valores reales y pronosticados
+valores_pronosticados <- pronostico_arima_test$pred
+df_comparacion <- data.frame(
+  Fecha = data_test$Fecha,
+  Real = data_test$ipc_st,
+  Pronóstico = valores_pronosticados
+)
+
+# Calcular el error del pronóstico
+df_comparacion <- df_comparacion %>%
+  mutate(Error = Real - Pronóstico,
+         Error_Cuadrado = Error^2)
+
+# Calcular suma y raíz cuadrada de los errores al cuadrado
+suma_errores <- sum(df_comparacion$Error_Cuadrado, na.rm = TRUE)
+raiz_cuadrada_errores <- sqrt(suma_errores)
+
+modelo3_errores <- raiz_cuadrada_errores
+
+
+print(modelo1_errores)
+print(modelo2_errores)
+print(modelo3_errores)
+
+
+
+#Train test minimiza el 3, pero preferimos priorizar BIC
